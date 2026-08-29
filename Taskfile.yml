@@ -1,0 +1,78 @@
+version: '3'
+
+vars:
+  APP_NAME: "redsqlite"
+  # 应用版本：单一来源。发布时改这里 + build/windows/info.json（保持一致），
+  # 会经 -ldflags 注入 main.appVersion（启动日志可见）。
+  APP_VERSION: "1.0.0"
+  BIN_DIR: "bin"
+  PACKAGE_MANAGER: '{{.PACKAGE_MANAGER | default "npm"}}'
+  VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'
+  # Target OS for build/package/run. Defaults to the host OS, and is overridden
+  # by `wails3 build GOOS=...` (or the GOOS env var) for cross-compilation. The
+  # tasks below dispatch to the matching platform Taskfile via this variable.
+  GOOS: '{{.GOOS | default OS}}'
+
+includes:
+  common: ./build/Taskfile.yml
+  windows: ./build/windows/Taskfile.yml
+  darwin: ./build/darwin/Taskfile.yml
+  linux: ./build/linux/Taskfile.yml
+  ios: ./build/ios/Taskfile.yml
+  android: ./build/android/Taskfile.yml
+
+tasks:
+  build:
+    summary: Builds the application
+    cmds:
+      - task: "{{.GOOS}}:build"
+
+  build:arm64:
+    summary: Builds the Windows ARM64 executable (bin/redsqlite-arm64.exe)
+    desc: 在 amd64 主机交叉编译 Windows ARM64 版本（纯 Go 驱动，无 CGO）
+    cmds:
+      - task: "windows:build"
+        vars:
+          ARCH: arm64
+      - cmd: powershell Move-Item -Force "{{.BIN_DIR}}/{{.APP_NAME}}.exe" "{{.BIN_DIR}}/{{.APP_NAME}}-arm64.exe"
+        platforms: [windows]
+
+  package:
+    summary: Packages a production build of the application
+    cmds:
+      - task: "{{.GOOS}}:package"
+
+  run:
+    summary: Runs the application
+    cmds:
+      - task: "{{.GOOS}}:run"
+
+  dev:
+    summary: Runs the application in development mode
+    cmds:
+      - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
+
+  setup:docker:
+    summary: Builds Docker image for cross-compilation (~800MB download)
+    cmds:
+      - task: common:setup:docker
+
+  build:server:
+    summary: Builds the application in server mode (no GUI, HTTP server only)
+    cmds:
+      - task: common:build:server
+
+  run:server:
+    summary: Runs the application in server mode
+    cmds:
+      - task: common:run:server
+
+  build:docker:
+    summary: Builds a Docker image for server mode deployment
+    cmds:
+      - task: common:build:docker
+
+  run:docker:
+    summary: Builds and runs the Docker image
+    cmds:
+      - task: common:run:docker

@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="RedSQLite 图标">
+  <!-- RedSQLite：红色圆角底 + 白色数据库圆柱，简洁扁平，小尺寸可辨识 -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f25745"/>
+      <stop offset="1" stop-color="#c0272d"/>
+    </linearGradient>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#ffe3de"/>
+    </linearGradient>
+    <radialGradient id="sheen" cx="0.3" cy="0.22" r="0.9">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.28"/>
+      <stop offset="0.6" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- 圆角方形底（Windows 11 风格） -->
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)"/>
+
+  <!-- 数据库圆柱 -->
+  <g>
+    <!-- 柱身（底部椭圆凸出） -->
+    <path d="M140 172 L140 348 A116 46 0 0 0 372 348 L372 172 Z" fill="url(#body)"/>
+    <!-- 顶面椭圆 -->
+    <ellipse cx="256" cy="172" rx="116" ry="46" fill="#ffffff"/>
+    <!-- 两道分层弧线（与底色同系，形成分层视效） -->
+    <path d="M140 230 A116 46 0 0 0 372 230" fill="none" stroke="#e0685c" stroke-width="13" stroke-linecap="round"/>
+    <path d="M140 288 A116 46 0 0 0 372 288" fill="none" stroke="#e0685c" stroke-width="13" stroke-linecap="round"/>
+    <!-- 顶面内圈细节（轻微内阴影感） -->
+    <ellipse cx="256" cy="172" rx="116" ry="46" fill="none" stroke="#f6d9d4" stroke-width="6"/>
+  </g>
+
+  <!-- 顶部光泽 -->
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#sheen)"/>
+</svg>
