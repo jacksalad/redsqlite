@@ -525,29 +525,45 @@ func (r *SchemaRepository) ExecRedesignPlan(ctx context.Context, plan RedesignPl
 		return err
 	}
 
-	rows, err := tx.QueryContext(ctx, `PRAGMA foreign_key_check`)
-	if err == nil {
-		violations := 0
-		sample := ""
-		for rows.Next() {
-			var tbl string
-			var rowid any
-			var refTable string
-			var fkid int
-			if err := rows.Scan(&tbl, &rowid, &refTable, &fkid); err == nil {
-				violations++
-				if sample == "" {
-					sample = fmt.Sprintf("%s 行 %v -> %s", tbl, rowid, refTable)
-				}
-			}
-		}
-		rows.Close()
-		if violations > 0 {
-			return fmt.Errorf("外键检查未通过（%d 处违例，首例：%s），已回滚", violations, sample)
-		}
+	if err := r.checkForeignKeys(ctx, tx); err != nil {
+		return err
 	}
 
 	return tx.Commit()
+}
+
+// checkForeignKeys 在事务内运行 PRAGMA foreign_key_check 并清点违例。
+// 重建期间 foreign_keys 已被关闭（PRAGMA 在事务内是 no-op，只能事务外切），
+// 这次检查是提交前的唯一防线：查询或读取本身失败也必须返回错误阻断提交，
+// 而不是跳过校验放行可能含脏外键数据的事务。
+func (r *SchemaRepository) checkForeignKeys(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return fmt.Errorf("外键检查执行失败（已回滚）: %w", err)
+	}
+	defer rows.Close()
+	violations := 0
+	sample := ""
+	for rows.Next() {
+		var tbl string
+		var rowid any
+		var refTable string
+		var fkid int
+		if err := rows.Scan(&tbl, &rowid, &refTable, &fkid); err != nil {
+			return fmt.Errorf("外键检查读取失败（已回滚）: %w", err)
+		}
+		violations++
+		if sample == "" {
+			sample = fmt.Sprintf("%s 行 %v -> %s", tbl, rowid, refTable)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("外键检查读取失败（已回滚）: %w", err)
+	}
+	if violations > 0 {
+		return fmt.Errorf("外键检查未通过（%d 处违例，首例：%s），已回滚", violations, sample)
+	}
+	return nil
 }
 
 // execRedesignCopy 执行数据拷贝：rowid 表按 rowid 范围分块（每块一个

@@ -9,5 +9,3 @@ build/ios/xcode/overlay.json
 build/ios/xcode/gen/
 build/android/overlay.json
 build/android/gen/
-# 审查报告等本地工作产物
-tasks/

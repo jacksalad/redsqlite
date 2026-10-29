@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CellValue } from "../types";
 import { CellView } from "./CellView";
 
@@ -6,6 +6,12 @@ export interface GridSort {
   column: string;
   desc: boolean;
 }
+
+/** 超过该行数启用窗口化渲染：查询页结果集可设到百万行，全量建 DOM 会
+ * 冻结 UI；表数据页 pageSize 上限 1000，恰好保持非窗口路径（编辑交互不变）。 */
+const VIRTUAL_MIN_ROWS = 1000;
+/** 视口外多渲染的行数，快速滚动时避免闪白。 */
+const VIRTUAL_OVERSCAN = 12;
 
 export interface EditingCell {
   rowKey: string;
@@ -132,12 +138,51 @@ export function DataGrid({
     selectable && rowKeys !== undefined && rowKeys.length > 0 &&
     rowKeys.every((k) => selectedKeys?.has(k));
 
+  // ---------- 窗口化渲染（大结果集） ----------
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [viewTop, setViewTop] = useState(0);
+  const [viewH, setViewH] = useState(600);
+  const [rowH, setRowH] = useState(28);
+  const virtual = rows.length > VIRTUAL_MIN_ROWS;
+
+  // 视口高度：滚动容器尺寸变化时重算
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || !virtual) return;
+    const ro = new ResizeObserver(() => setViewH(el.clientHeight));
+    ro.observe(el);
+    setViewH(el.clientHeight);
+    return () => ro.disconnect();
+  }, [virtual]);
+
+  // 行高按实际渲染行测量（单元格 nowrap 单行，行高一致）：偏差超过
+  // 0.5px 时校正，保证窗口定位与滚动条长度准确
+  useLayoutEffect(() => {
+    const el = wrapRef.current;
+    if (!el || !virtual) return;
+    const tr = el.querySelector<HTMLTableRowElement>("tbody tr:not(.virt-spacer)");
+    if (tr && Math.abs(tr.offsetHeight - rowH) > 0.5) setRowH(tr.offsetHeight);
+  });
+
+  const colCount = columns.length + (selectable || showRowNumbers ? 1 : 0);
+  let start = 0;
+  let end = rows.length;
+  if (virtual) {
+    start = Math.max(0, Math.min(rows.length - 1, Math.floor(viewTop / rowH) - VIRTUAL_OVERSCAN));
+    end = Math.max(start + 1, Math.min(rows.length, Math.ceil((viewTop + viewH) / rowH) + VIRTUAL_OVERSCAN));
+  }
+  const visible = virtual ? rows.slice(start, end) : rows;
+
   const handleHeaderClick = (column: string) => {
     if (onSort) onSort(column);
   };
 
   return (
-    <div className="datagrid-wrap">
+    <div
+      className="datagrid-wrap"
+      ref={wrapRef}
+      onScroll={virtual ? (e) => setViewTop(e.currentTarget.scrollTop) : undefined}
+    >
       <table className="datagrid">
         <thead>
           <tr>
@@ -192,12 +237,18 @@ export function DataGrid({
         <tbody>
           {rows.length === 0 && (
             <tr>
-              <td colSpan={columns.length + 1} className="empty-cell">
+              <td colSpan={colCount} className="empty-cell">
                 {emptyText}
               </td>
             </tr>
           )}
-          {rows.map((row, r) => {
+          {virtual && start > 0 && (
+            <tr className="virt-spacer" aria-hidden="true">
+              <td colSpan={colCount} style={{ height: start * rowH }} />
+            </tr>
+          )}
+          {visible.map((row, vi) => {
+            const r = start + vi;
             const rowKey = rowKeys?.[r] ?? String(r);
             const selected = selectedKeys?.has(rowKey) ?? false;
             return (
@@ -256,6 +307,11 @@ export function DataGrid({
               </tr>
             );
           })}
+          {virtual && end < rows.length && (
+            <tr className="virt-spacer" aria-hidden="true">
+              <td colSpan={colCount} style={{ height: (rows.length - end) * rowH }} />
+            </tr>
+          )}
         </tbody>
       </table>
     </div>

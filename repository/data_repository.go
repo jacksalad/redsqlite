@@ -756,14 +756,16 @@ func (r *DataRepository) GetCellBlob(ctx context.Context, table string, key map[
 		return domain.BinaryContent{}, err
 	}
 
-	// 空长度 BLOB 经驱动扫描会变成 nil []byte，用 IS NULL 区分 NULL 与空 BLOB
-	var data []byte
+	// 先查长度判限、再取内容：直接 SELECT 列值会先把整个 BLOB 物化进内存，
+	// GB 级 BLOB 会先占满堆才被上限拒绝；length() 不搬运列内容。
+	// 空长度 BLOB 经驱动扫描会变成 nil []byte，仍需 IS NULL 辅助列区分 NULL 与空 BLOB
+	var size sql.NullInt64
 	var isNull int64
 	if err := db.QueryRowContext(ctx,
-		fmt.Sprintf("SELECT %s, (%s IS NULL) FROM %s WHERE %s LIMIT 1",
+		fmt.Sprintf("SELECT length(%s), (%s IS NULL) FROM %s WHERE %s LIMIT 1",
 			quotedColumn, quotedColumn, quotedTable, whereSQL),
 		whereArgs...,
-	).Scan(&data, &isNull); err != nil {
+	).Scan(&size, &isNull); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.BinaryContent{}, fmt.Errorf("没有匹配的行（行可能已被修改或删除）")
 		}
@@ -771,6 +773,22 @@ func (r *DataRepository) GetCellBlob(ctx context.Context, table string, key map[
 	}
 	if isNull == 1 {
 		return domain.BinaryContent{}, fmt.Errorf("该单元格不是 BLOB（可能为 NULL）")
+	}
+	if !size.Valid || size.Int64 > maxBlobTransferBytes {
+		return domain.BinaryContent{}, fmt.Errorf("BLOB 大小超过 %d MB，不支持在线查看/另存", maxBlobTransferBytes/(1<<20))
+	}
+
+	// 两次查询之间行内容可能被修改，取回后防御性复查
+	var data []byte
+	if err := db.QueryRowContext(ctx,
+		fmt.Sprintf("SELECT %s FROM %s WHERE %s LIMIT 1",
+			quotedColumn, quotedTable, whereSQL),
+		whereArgs...,
+	).Scan(&data); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.BinaryContent{}, fmt.Errorf("没有匹配的行（行可能已被修改或删除）")
+		}
+		return domain.BinaryContent{}, fmt.Errorf("读取单元格失败: %w", err)
 	}
 	if int64(len(data)) > maxBlobTransferBytes {
 		return domain.BinaryContent{}, fmt.Errorf("BLOB 大小超过 %d MB，不支持在线查看/另存", maxBlobTransferBytes/(1<<20))

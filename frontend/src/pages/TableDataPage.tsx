@@ -57,7 +57,6 @@ export function TableDataPage({ tab }: TableDataPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [totalRows, setTotalRows] = useState<number | null>(null);
   const countSeq = useRef(0);
-  // 主加载过期守卫：快速翻页/改筛选时，旧响应不得覆盖新响应（同 countSeq 模式）
   const loadSeq = useRef(0);
 
   const [nav, setNav] = useState<Nav>(INITIAL_NAV);
@@ -95,10 +94,11 @@ export function TableDataPage({ tab }: TableDataPageProps) {
       const conds = opts?.conditions !== undefined ? opts.conditions : conditions;
       // 始终携带游标：后端按 排序+游标列 可用性决定游标/OFFSET 模式（V3.0
       // 排序浏览也走复合游标分页），OFFSET 模式下 cursor 被忽略
+      // 序号守卫：快速翻页/切排序/切筛选时丢弃后发先至的过期响应，防止旧数据覆盖新页
+      const reqSeq = ++loadSeq.current;
       setLoading(true);
       setError(null);
       setEditing(null);
-      const seq = ++loadSeq.current;
       try {
         const result = await api.getTableData(connId, {
           table,
@@ -110,24 +110,24 @@ export function TableDataPage({ tab }: TableDataPageProps) {
           conditions: conds,
           cursor: n.cursor,
         });
-        if (loadSeq.current !== seq) return; // 已被更新的加载取代
+        if (loadSeq.current !== reqSeq) return;
         setData(result);
-        // 行数统计异步进行，大表 COUNT(*) 不阻塞浏览
-        const cseq = ++countSeq.current;
+        // 行数统计异步进行，大表 COUNT(*) 不阻塞浏览（V1.1）
+        const seq = ++countSeq.current;
         api
           .countTableRows(connId, table, f, conds)
           .then((total) => {
-            if (countSeq.current === cseq) setTotalRows(total);
+            if (countSeq.current === seq) setTotalRows(total);
           })
           .catch(() => {
-            if (countSeq.current === cseq) setTotalRows(null);
+            if (countSeq.current === seq) setTotalRows(null);
           });
       } catch (err) {
-        if (loadSeq.current !== seq) return;
+        if (loadSeq.current !== reqSeq) return;
         setError(getErrorMessage(err));
         setData(null);
       } finally {
-        if (loadSeq.current === seq) setLoading(false);
+        if (loadSeq.current === reqSeq) setLoading(false);
       }
     },
     [table, nav, pageSize, sort, filter, conditions],
@@ -300,7 +300,7 @@ export function TableDataPage({ tab }: TableDataPageProps) {
     }
     setEditing(null);
     try {
-      await api.updateCell(connId, table, keyMap, column, value);
+      await api.updateCell(connId, table, keyMap, column, value === undefined ? null : value);
       toastSuccess("已更新");
       await load();
     } catch (err) {

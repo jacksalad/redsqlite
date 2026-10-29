@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +53,22 @@ func NewStore() *Store {
 	}
 }
 
+// pathKey 归一化绝对路径作为 byPath 复用索引的键：先解析符号链接，
+// 再在大小写不敏感的文件系统（Windows）上折叠大小写。否则最近列表与
+// 文件对话框返回的同一物理文件（大小写/符号链接写法不同）会被当成
+// 两个路径各建一个连接，两个连接互相竞争文件锁导致 SQLITE_BUSY。
+// 解析失败时退回原路径（保持旧行为）。c.path 仍保存用户选择的原始路径。
+func pathKey(abs string) string {
+	p := abs
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		p = resolved
+	}
+	if runtime.GOOS == "windows" {
+		p = strings.ToLower(p)
+	}
+	return p
+}
+
 // Open 校验并打开数据库文件（可多个并存），返回连接信息。
 // enableWAL 为 true 时设置 journal_mode=WAL；forceReadOnly 为 true 时
 // 无视文件可写性强制以只读打开。同一路径重复打开返回已有连接（Reused=true）。
@@ -75,8 +92,9 @@ func (s *Store) Open(path string, enableWAL bool, forceReadOnly bool) (domain.Da
 
 	// 同路径复用：模式可能不同（如已写模式打开后再请求只读），
 	// 以现有连接为准，前端可据 Reused 提示。
+	key := pathKey(abs)
 	s.mu.Lock()
-	if id, ok := s.byPath[abs]; ok {
+	if id, ok := s.byPath[key]; ok {
 		c := s.conns[id]
 		s.mu.Unlock()
 		if c == nil {
@@ -117,7 +135,7 @@ func (s *Store) Open(path string, enableWAL bool, forceReadOnly bool) (domain.Da
 	s.mu.Lock()
 	// 双重检查：并发打开同一路径（注册表不一致时 existing 可能为 nil，
 	// 走下方全新注册路径，避免对 nil 连接取信息）
-	if id, ok := s.byPath[abs]; ok {
+	if id, ok := s.byPath[key]; ok {
 		if existing := s.conns[id]; existing != nil {
 			s.mu.Unlock()
 			db.Close()
@@ -138,7 +156,7 @@ func (s *Store) Open(path string, enableWAL bool, forceReadOnly bool) (domain.Da
 	}
 	c.baseCtx, c.cancel = context.WithCancel(context.Background())
 	s.conns[c.id] = c
-	s.byPath[abs] = c.id
+	s.byPath[key] = c.id
 	s.mu.Unlock()
 
 	return s.buildInfo(c)
@@ -153,8 +171,8 @@ func (s *Store) CloseConn(id string) error {
 		return ErrNotOpen
 	}
 	delete(s.conns, id)
-	if s.byPath[c.path] == id {
-		delete(s.byPath, c.path)
+	if key := pathKey(c.path); s.byPath[key] == id {
+		delete(s.byPath, key)
 	}
 	s.mu.Unlock()
 

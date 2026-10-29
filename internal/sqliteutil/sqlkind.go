@@ -106,7 +106,7 @@ func FirstKeyword(sql string) string {
 func Classify(sql string) SQLKind {
 	kw := FirstKeyword(sql)
 	switch kw {
-	case "SELECT", "WITH", "VALUES", "PRAGMA", "EXPLAIN":
+	case "SELECT", "WITH", "VALUES", "PRAGMA", "EXPLAIN", "TABLE":
 		return KindQuery
 	case "":
 		return KindInvalid

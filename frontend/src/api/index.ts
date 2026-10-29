@@ -50,6 +50,8 @@ export const pickDatabaseFile = (): Promise<string> => DatabaseService.PickDatab
 export const openDatabase = (path: string, readOnly = false): Promise<DatabaseInfo> =>
   DatabaseService.Open(path, readOnly);
 export const closeDatabase = (connId: string): Promise<void> => DatabaseService.Close(connId);
+export const getDatabaseInfo = (connId: string): Promise<DatabaseInfo> =>
+  DatabaseService.GetInfo(connId);
 /** 选择备份保存位置（V2.5），取消返回空字符串。 */
 export const pickBackupPath = (defaultName: string): Promise<string> =>
   DatabaseService.PickBackupPath(defaultName);

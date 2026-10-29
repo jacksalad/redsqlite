@@ -90,8 +90,8 @@ func (s *SchemaService) ApplyTableRedesign(connID string, rd domain.TableRedesig
 	return nil
 }
 
-// redesignChunkSize 按预计行数自适应分块：total/200（约 200 次进度回调），
-// 下限 1000（小表一个块整拷）；repository 侧另钳制上限 50000。
+// redesignChunkSize 按预计行数自适应分块：约 200 次进度回调封顶，
+// 小表一次整拷（1000 行以下一个块）。边界钳制在 repository 侧。
 func redesignChunkSize(total int64) int {
 	if total <= 0 {
 		return 2000
@@ -268,6 +268,14 @@ func (b *boundSchema) buildRedesign(rd domain.TableRedesign) (domain.RedesignPre
 		if len(triggerRefs) > 0 || len(viewRefs) > 0 {
 			parts := append(triggerRefs, viewRefs...)
 			return blocked("以下触发器/视图引用了该表，重命名将使其失效（请先调整）：" + strings.Join(parts, "、"))
+		}
+		// 部分索引/表达式索引只能按原文重建（ON 子句仍指向旧表名），改名后
+		// 旧表名不复存在、CREATE INDEX 必然失败 → 预览期直接阻断而不是执行中途回滚
+		for _, idx := range indexes {
+			if idx.Origin == "c" && (idx.Partial || idx.HasExpression) {
+				return blocked(fmt.Sprintf(
+					"索引 %q 是部分索引/表达式索引，重建时按原文指向旧表名，不支持同时重命名表（请先删除该索引或去掉重命名）", idx.Name))
+			}
 		}
 	}
 

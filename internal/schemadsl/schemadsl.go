@@ -441,8 +441,10 @@ func renderColumnDef(c domain.ColumnSpec, columnPK bool) (string, error) {
 	return strings.Join(parts, " "), nil
 }
 
-// validateTypeName 类型名仅允许字母/数字/空格与 ( ) , _ .（如 VARCHAR(10)、
-// UNSIGNED BIG INT）；空类型合法（SQLite 允许无类型列）。
+// validateTypeName 类型名仅允许字母/数字/空格与 ( ) , _ .（如 DECIMAL(10,5)、
+// UNSIGNED BIG INT），且括号必须配平、逗号只能出现在括号内（类型参数）——
+// 防止借类型名向列定义注入表级约束（如 "INT, UNIQUE"、"INT), CHECK (a)"）。
+// 空类型合法（SQLite 允许无类型列）。
 func validateTypeName(t string) error {
 	t = strings.TrimSpace(t)
 	if t == "" {
@@ -459,7 +461,7 @@ func validateTypeName(t string) error {
 			return fmt.Errorf("包含非法字符 %q", r)
 		}
 	}
-	return nil
+	return scanParens(t)
 }
 
 // ParseLiteral 校验并原样返回单条 SQLite 字面量：
@@ -532,8 +534,10 @@ func renderExpression(expr string) string {
 	return "(" + expr + ")"
 }
 
-// validateExpression 表达式默认值仅拒绝可能拆分语句/破坏 DDL 结构的
-// 内容（分号、注释起始、引号外的 NUL），其余交给 SQLite 解析器裁决。
+// validateExpression 表达式默认值仅拒绝可能拆分语句/破坏 DDL 结构的内容：
+// 分号、注释起始、引号外的 NUL（防语句拆分注入），以及括号不配平或顶层
+// 逗号（防提前闭合 DEFAULT(...) / GENERATED ALWAYS AS(...) 的包裹括号、
+// 向 CREATE TABLE 注入表级约束），其余交给 SQLite 解析器裁决。
 func validateExpression(expr string) error {
 	if expr == "" {
 		return fmt.Errorf("表达式为空")
@@ -549,6 +553,51 @@ func validateExpression(expr string) error {
 	}
 	if strings.ContainsRune(expr, '\x00') {
 		return fmt.Errorf("表达式包含非法字符")
+	}
+	return scanParens(expr)
+}
+
+// scanParens 检查括号配平与顶层逗号：'...'（双写转义）、"..."、`...`
+// 引号区内的括号与逗号不计数（'a)b'、"col" 等合法内容不受影响）。
+// 右括号提前出现（深度为负）、结尾深度非零、顶层逗号或引号区未闭合
+// 都判定非法——表达式/类型名最终会被包进 DEFAULT(...)、
+// GENERATED ALWAYS AS(...) 或列定义里，配平保证无法逃出包裹结构。
+func scanParens(s string) error {
+	depth := 0
+	var quote byte // 0 = 不在引号区，否则为 ' " ` 之一
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if quote != 0 {
+			if ch == quote {
+				if i+1 < len(s) && s[i+1] == quote {
+					i++ // 引号双写转义（如 'it''s'）
+					continue
+				}
+				quote = 0
+			}
+			continue
+		}
+		switch ch {
+		case '\'', '"', '`':
+			quote = ch
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth < 0 {
+				return fmt.Errorf("括号不配对")
+			}
+		case ',':
+			if depth == 0 {
+				return fmt.Errorf("括号外不允许逗号")
+			}
+		}
+	}
+	if quote != 0 {
+		return fmt.Errorf("引号未闭合")
+	}
+	if depth != 0 {
+		return fmt.Errorf("括号不配对")
 	}
 	return nil
 }

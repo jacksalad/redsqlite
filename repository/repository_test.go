@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -577,6 +578,28 @@ func TestStoreMultiConnection(t *testing.T) {
 	}
 }
 
+// 不同大小写的同一路径必须复用同一连接（Windows 文件系统大小写不敏感；
+// 若各建连接，两个连接会互相竞争文件锁导致 SQLITE_BUSY）。
+func TestStorePathKeyReuse(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("大小写折叠仅对 Windows 文件系统有意义")
+	}
+	store, conn := newTestStore(t)
+
+	path := store.Path(conn)
+	variant := strings.ToUpper(path)
+	if variant == path {
+		variant = strings.ToLower(path)
+	}
+	info, err := store.Open(variant, false, false)
+	if err != nil {
+		t.Fatalf("以不同大小写打开同一路径失败: %v", err)
+	}
+	if !info.Reused || info.ConnID != conn || store.Count() != 1 {
+		t.Fatalf("不同大小写的同一路径应复用连接: reused=%v connID=%q count=%d", info.Reused, info.ConnID, store.Count())
+	}
+}
+
 func TestStoreBackup(t *testing.T) {
 	store, conn := newTestStore(t)
 	ctx, err := store.Context(conn)
@@ -658,6 +681,15 @@ func TestGetCellBlob(t *testing.T) {
 	// 非法列名
 	if _, err := repo.GetCellBlob(ctx, "files", map[string]any{"id": float64(1)}, `bad"col`); err == nil {
 		t.Error("非法列名应报错")
+	}
+
+	// 超过 32MB 上限：先查 length() 即拒绝，不把内容物化进内存
+	if _, err := db.Exec(`INSERT INTO files VALUES (4, ?)`, make([]byte, maxBlobTransferBytes+1)); err != nil {
+		t.Fatalf("插入超大 BLOB 失败: %v", err)
+	}
+	if _, err := repo.GetCellBlob(ctx, "files", map[string]any{"id": float64(4)}, "data"); err == nil ||
+		!strings.Contains(err.Error(), "32 MB") {
+		t.Errorf("超大 BLOB 应在长度检查处拒绝: %v", err)
 	}
 }
 

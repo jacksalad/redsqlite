@@ -203,6 +203,110 @@ func TestBuildCreateTable(t *testing.T) {
 	}
 }
 
+// 表达式默认值/生成列/类型名的"提前闭括号"与顶层逗号注入防护
+// （V3.1 审计加固：无法逃出 DEFAULT(...) / GENERATED ALWAYS AS(...) 包裹）。
+func TestBuildCreateTableConstraintInjection(t *testing.T) {
+	reject := []struct {
+		name    string
+		spec    domain.CreateTableSpec
+		wantErr string
+	}{
+		{
+			name: "表达式默认值提前闭括号注入 CHECK",
+			spec: domain.CreateTableSpec{
+				Table: "t1",
+				Columns: []domain.ColumnSpec{
+					{Name: "a", Type: "INT", Default: "1) , CHECK (a > 999)", DefaultIsExpression: true},
+					{Name: "b", Type: "TEXT"},
+				},
+			},
+			wantErr: "括号不配对",
+		},
+		{
+			name: "闭后再开维持总数配平的注入仍在首个右括号被拒",
+			spec: domain.CreateTableSpec{
+				Table: "t2",
+				Columns: []domain.ColumnSpec{
+					{Name: "a", Type: "INT", Default: "1), CHECK (a > 1), (", DefaultIsExpression: true},
+				},
+			},
+			wantErr: "括号不配对",
+		},
+		{
+			name: "生成列表达式注入外键",
+			spec: domain.CreateTableSpec{
+				Table: "t3",
+				Columns: []domain.ColumnSpec{
+					{Name: "a", Type: "INT"},
+					{Name: "b", Generated: "a * 2) , FOREIGN KEY (a) REFERENCES logs(rowid) ON DELETE CASCADE , ("},
+				},
+			},
+			wantErr: "括号不配对",
+		},
+		{
+			name: "表达式顶层逗号",
+			spec: domain.CreateTableSpec{
+				Table: "t4",
+				Columns: []domain.ColumnSpec{
+					{Name: "a", Type: "INT", Default: "1 + 2, 3", DefaultIsExpression: true},
+				},
+			},
+			wantErr: "逗号",
+		},
+		{
+			name: "类型名逗号注入约束",
+			spec: domain.CreateTableSpec{
+				Table:   "t5",
+				Columns: []domain.ColumnSpec{{Name: "a", Type: "INT, UNIQUE"}},
+			},
+			wantErr: "逗号",
+		},
+		{
+			name: "类型名闭括号注入约束",
+			spec: domain.CreateTableSpec{
+				Table:   "t6",
+				Columns: []domain.ColumnSpec{{Name: "a", Type: "INT), CHECK (a)"}},
+			},
+			wantErr: "括号不配对",
+		},
+		{
+			name: "类型名括号不配平",
+			spec: domain.CreateTableSpec{
+				Table:   "t7",
+				Columns: []domain.ColumnSpec{{Name: "a", Type: "VARCHAR(10"}},
+			},
+			wantErr: "括号不配对",
+		},
+	}
+	for _, tc := range reject {
+		t.Run("拒绝/"+tc.name, func(t *testing.T) {
+			_, err := BuildCreateTable(tc.spec)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("期望错误包含 %q，实际: %v", tc.wantErr, err)
+			}
+		})
+	}
+
+	accept := []domain.CreateTableSpec{
+		{Table: "ok1", Columns: []domain.ColumnSpec{{Name: "a", Type: "DECIMAL(10,5)"}}},
+		{Table: "ok2", Columns: []domain.ColumnSpec{{Name: "a", Type: "UNSIGNED BIG INT"}}},
+		{Table: "ok3", Columns: []domain.ColumnSpec{{Name: "a", Type: "TEXT", Default: "substr('ab', 1, 2)", DefaultIsExpression: true}}},
+		{Table: "ok4", Columns: []domain.ColumnSpec{{Name: "a", Type: "TEXT", Default: "'a)b'", DefaultIsExpression: true}}},
+		{Table: "ok5", Columns: []domain.ColumnSpec{
+			{Name: "a", Type: "TEXT"},
+			{Name: "b", Generated: "coalesce(a, 'it''s, (x)')"},
+		}},
+		{Table: "ok6", Columns: []domain.ColumnSpec{{Name: "a", Type: "INT", Default: "(a + 1) * 2", DefaultIsExpression: true}}},
+	}
+	for _, spec := range accept {
+		t.Run("通过/"+spec.Table, func(t *testing.T) {
+			if _, err := BuildCreateTable(spec); err != nil {
+				t.Fatalf("合法输入不应报错: %v", err)
+			}
+		})
+	}
+}
+
 func TestParseLiteral(t *testing.T) {
 	ok := []string{"0", "-1", "3.14", "1e3", "0x1F", "NULL", "null", "true", "'abc'", "'it''s'", "x'616263'", "X''"}
 	for _, s := range ok {

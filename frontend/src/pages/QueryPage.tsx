@@ -62,6 +62,9 @@ export function QueryPage({ tab }: { tab: Tab }) {
   const [result, setResult] = useState<QueryResult | null>(null);
   const [batch, setBatch] = useState<BatchResult | null>(null);
   const [batchGridIndex, setBatchGridIndex] = useState<number>(-1);
+  /** 最近一次实际执行的 SQL：导出必须重放它而不是编辑器当前文本
+   * （执行后再改编辑器，导出的应是界面上所展示的结果，审计 M-9） */
+  const [executedSql, setExecutedSql] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [runningMs, setRunningMs] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -69,8 +72,9 @@ export function QueryPage({ tab }: { tab: Tab }) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const cancelRequested = useRef(false);
-  // 执行互斥：按钮 disabled 之外，Ctrl+Enter/危险确认弹窗仍可触发并发执行
+  // 执行中防重入：按钮 disabled 只挡鼠标，Ctrl+Enter 仍会触发，必须用 ref 挡住并发执行
   const runningRef = useRef(false);
+  const editorRef = useRef<HTMLDivElement>(null);
 
   const setSql = (value: string) => setTabSql(tab.id, value);
 
@@ -85,22 +89,23 @@ export function QueryPage({ tab }: { tab: Tab }) {
 
   // statements 传入已预检的结果（tryRun 已查询过），避免每次执行重复一次 IPC 往返
   const run = useCallback(async (statements?: StatementPreview[]) => {
+    if (runningRef.current) return;
     const text = sqlText.trim();
     if (!text) {
       toastError("SQL 不能为空");
       return;
     }
-    if (runningRef.current) return;
-    runningRef.current = true;
     setError(null);
     setResult(null);
     setBatch(null);
     setBatchGridIndex(-1);
+    runningRef.current = true;
     setRunning(true);
     cancelRequested.current = false;
     const startedAt = Date.now();
     try {
       const stmts = statements ?? (await api.previewSql(text));
+      setExecutedSql(text);
       if (stmts.length > 1) {
         const batchResult = await api.executeSqlBatch(connId, text);
         setBatch(batchResult);
@@ -142,12 +147,12 @@ export function QueryPage({ tab }: { tab: Tab }) {
 
   /** 先预检危险语句再执行（文档 13.2）；多语句时逐条确认。 */
   const tryRun = useCallback(async () => {
+    if (runningRef.current) return;
     const text = sqlText.trim();
     if (!text) {
       toastError("SQL 不能为空");
       return;
     }
-    if (runningRef.current) return;
     let statements: StatementPreview[];
     try {
       statements = await api.previewSql(text);
@@ -177,6 +182,7 @@ export function QueryPage({ tab }: { tab: Tab }) {
         setResult(null);
         setBatch(null);
         setError(null);
+        setExecutedSql(null);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -200,15 +206,20 @@ export function QueryPage({ tab }: { tab: Tab }) {
   };
 
   const exportResult = async (format: "csv" | "json" | "xlsx") => {
-    const sqlToExport = sqlText.trim();
     if (batch) {
       toastError("多语句结果暂不支持导出，请单独执行要导出的查询");
       return;
     }
-    if (!(result?.isQuery ?? false)) {
+    if (!result) {
+      toastError("请先执行查询后再导出");
+      return;
+    }
+    if (!result.isQuery) {
       toastError("只有查询结果可以导出");
       return;
     }
+    // 重放最近一次执行的 SQL（而非编辑器当前文本），保证导出内容与界面展示一致
+    const sqlToExport = executedSql ?? sqlText.trim();
     try {
       const path = await api.pickExportPath("query-result", format);
       if (!path) return;
@@ -229,7 +240,7 @@ export function QueryPage({ tab }: { tab: Tab }) {
 
   return (
     <div className="page query-page">
-      <div className="query-editor-zone">
+      <div className="query-editor-zone" ref={editorRef}>
         <div className="query-toolbar">
           <button className="btn primary" onClick={() => void tryRun()} disabled={running} title="执行（Ctrl+Enter）">
             <Play size={13} /> 执行
@@ -247,6 +258,7 @@ export function QueryPage({ tab }: { tab: Tab }) {
               setResult(null);
               setBatch(null);
               setError(null);
+              setExecutedSql(null);
             }}
             title="清空（Ctrl+L）"
           >

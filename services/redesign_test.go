@@ -252,6 +252,40 @@ func TestRedesignBlockedCases(t *testing.T) {
 	}
 }
 
+// 部分索引/表达式索引按原文重建（ON 子句指向旧表名），表重命名后旧表名
+// 不复存在、重建必然失败——必须在预览期阻断而不是执行中途回滚。
+func TestRedesignRenameWithPartialIndexBlocked(t *testing.T) {
+	svc, conn := newRedesignStore(t)
+	db, _ := svc.store.DB(conn)
+	if _, err := db.Exec(`CREATE TABLE pi (id INTEGER PRIMARY KEY, v TEXT);
+		CREATE INDEX idx_pi_v ON pi(v) WHERE v IS NOT NULL;
+		CREATE INDEX idx_pi_expr ON pi(lower(v))`); err != nil {
+		t.Fatalf("建表失败: %v", err)
+	}
+	cols := []domain.RedesignColumn{
+		{Name: "id", Type: "INTEGER", PrimaryKey: true},
+		{Name: "v", Type: "TEXT"},
+	}
+
+	// 不重命名：部分/表达式索引按原文重建，预览通过
+	p, err := svc.PreviewTableRedesign(conn, domain.TableRedesign{Table: "pi", Columns: cols})
+	if err != nil {
+		t.Fatalf("预览失败: %v", err)
+	}
+	if p.Blocked != "" {
+		t.Fatalf("不重命名不应阻断: %s", p.Blocked)
+	}
+
+	// 重命名：预检阻断并点名索引
+	p, err = svc.PreviewTableRedesign(conn, domain.TableRedesign{Table: "pi", NewTable: "pi2", Columns: cols})
+	if err != nil {
+		t.Fatalf("预览失败: %v", err)
+	}
+	if !strings.Contains(p.Blocked, "idx_pi_") || !strings.Contains(p.Blocked, "重命名") {
+		t.Fatalf("重命名应阻断部分/表达式索引重建: %q", p.Blocked)
+	}
+}
+
 func TestRedesignRollbackOnNotNullViolation(t *testing.T) {
 	svc, conn := newRedesignStore(t)
 	db, _ := svc.store.DB(conn)

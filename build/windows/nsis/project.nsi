@@ -22,7 +22,7 @@
 ## !define INFO_PROJECTNAME    "my-project" # Default "RedSQLite"
 ## !define INFO_COMPANYNAME    "My Company" # Default "My Company"
 ## !define INFO_PRODUCTNAME    "My Product Name" # Default "My Product"
-## !define INFO_PRODUCTVERSION "1.0.0"     # Default "0.1.0"
+## !define INFO_PRODUCTVERSION "1.1.0"     # Default "0.1.0"
 ## !define INFO_COPYRIGHT      "(c) Now, My Company" # Default "© 2026, My Company"
 ###
 ## !define PRODUCT_EXECUTABLE  "Application.exe"      # Default "${INFO_PROJECTNAME}.exe"
@@ -37,7 +37,7 @@
 # 改版本号时与 Taskfile.yml 的 APP_VERSION、build/windows/info.json 保持一致。
 !define INFO_COMPANYNAME    "RedJACK"
 !define INFO_PRODUCTNAME    "RedSQLite"
-!define INFO_PRODUCTVERSION "1.0.0"
+!define INFO_PRODUCTVERSION "1.1.0"
 !define INFO_COPYRIGHT      "© 2026 RedJACK"
 
 !include "wails_tools.nsh"
